@@ -71,3 +71,8 @@ deno run -A scripts/story_pdf.ts stories
   `Note over` in sequence diagrams may be dropped. `<br/>`, `<b>` and `<i>` work in labels.
 - **Libraries load from a CDN** on first play, preview render or PDF export; the editor still opens, edits and saves
   offline.
+
+## Licence
+
+MIT - see [LICENSE](LICENSE). The vendored nomnoml is also MIT licensed, under its own copyright
+(`tools/story-builder/js/vendor/LICENSE-nomnoml`).
