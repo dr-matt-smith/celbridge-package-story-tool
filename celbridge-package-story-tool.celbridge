@@ -1,0 +1,19 @@
+[celbridge]
+celbridge-version = "1.2.0"
+project-version = "0.1.0"
+
+# 'hide' keeps resources out of the Explorer tree. 'search-exclude' also keeps them out of search.
+[celbridge.resources]
+hide = [".gitignore", ".DS_Store", "Thumbs.db", "desktop.ini", "deno.json"]
+search-exclude = ["tools/story-builder/docs"]
+
+[[shortcut]]
+resource = "README.md"
+icon = "bs-book"
+open-on-load = true
+
+[[shortcut]]
+resource = "stories/examples.story"
+icon = "bs-easel"
+area = "main"
+open-on-load = true
