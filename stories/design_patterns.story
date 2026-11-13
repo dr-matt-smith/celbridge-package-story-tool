@@ -60,7 +60,7 @@
       "name": "Pattern-Families",
       "x": 480,
       "y": 140,
-      "text": "# The three families\n\n```mermaid\nflowchart LR\n    P([The 23 GoF patterns]) --> C[Creational (5)]\n    P --> S[Structural (7)]\n    P --> B[Behavioural (11)]\n    classDef today fill:#fff3c4,stroke:#e0a800,stroke-width:3px\n```\n"
+      "text": "# The three families\n\n```mermaid\nflowchart LR\n    P([The 23 GoF patterns]) --> C[\"Creational (5)\"]\n    P --> S[\"Structural (7)\"]\n    P --> B[\"Behavioural (11)\"]\n    classDef today fill:#fff3c4,stroke:#e0a800,stroke-width:3px\n```\n\n"
     },
     {
       "name": "Creational",

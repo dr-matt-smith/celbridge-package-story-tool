@@ -48,7 +48,7 @@
       "name": "Node 5",
       "x": -300,
       "y": -140,
-      "text": "```nomnoml\n#.tesco: visual=package fill=pink\n#.argos: visual=package fill=#8f8\n\n\n[<frame> cd: |\n  [<tesco> tesco |\n    [<class id=beeper> «abstract»;Beeper]\n    [beeper]->1[Piston]\n    [Cylinder]->2[Valve]\n  ]\n  [<argos> argos |\n    [<class id=comp> «abstract»;Compomnent]\n    [comp]<:-[Piston]\n    [comp]<--[Wheel]\n    [comp]<:-[Nut]\n  ]\n]\n```\n"
+      "text": "```nomnoml\n#.tesco: visual=package fill=pink\n#.argos: visual=package fill=#8f8\n\n\n[<frame> cd: class diagram|\n  [<tesco> tesco |\n    [<class id=beeper> «abstract»;Beeper]\n    [beeper]->1[Piston]\n    [Cylinder]->2[Valve]\n  ]\n  [<argos> argos |\n    [<class id=comp> «abstract»;Compomnent]\n    [comp]<:-[Piston]\n    [comp]<--[Wheel]\n    [comp]<:-[Nut]\n  ]\n]\n```\n"
     },
     {
       "name": "Node 6",

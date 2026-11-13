@@ -2,7 +2,7 @@
   "name": "",
   "description": "",
   "navigation": {
-    "show": true,
+    "show": false,
     "style": "arrows",
     "position": "top-right",
     "showNumber": true
