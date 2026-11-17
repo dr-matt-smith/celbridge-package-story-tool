@@ -34,6 +34,9 @@ const OCCUPIED_Y = 40;
 // document is resized. Matches --inspector-min/default/max in the stylesheet.
 const INSPECTOR_MIN_FRACTION = 0.2;
 const INSPECTOR_DEFAULT_FRACTION = 0.3;
+// Beside the list the panel takes most of the document, leaving the list about a tenth of the width, since
+// the list only needs room for the node names.
+const INSPECTOR_SEQUENCE_DEFAULT_FRACTION = 0.9;
 // The panel may take most of the document, in either view, so a node's text and preview can have the room.
 const INSPECTOR_MAX_FRACTION = 0.9;
 // Below this the document cannot spare a column for the panel and stacks it under the canvas. The host holds
@@ -63,14 +66,28 @@ const MARP_PLUGIN_URLS = [
 // them (images, positioned elements) unscaled, so without the polyfill a slide narrower than 1280px shows a
 // cropped corner.
 const MARP_BROWSER_URL = `${MARP_URL}/browser`;
-// A nomnoml diagram is drawn at its natural size, which is often a small corner of the slide, so it is stretched
-// across the slide's width by default, keeping its proportions. A Pele (Mermaid) diagram is given its width by
+// A nomnoml diagram is given its size by js/nomnoml-plugin.js (up to twice its natural size) and centred. It is
+// never stretched to fill the slide, so a small diagram leaves room for the text and code around it. A Pele (Mermaid) diagram is given its width by
 // js/pele-plugin.js (up to twice its natural size, and already scaled down to fit a 1280 x 720 slide, which the PDF
 // export needs), and is centred. No theme knows either, so both are also capped here at the height the default
 // theme gives a Mermaid diagram; for Pele that is only a safety net, for a smaller slide size.
+//
+// An SVG image on a paragraph of its own (![](diagram.svg)) grows to fill the room the slide's other content
+// leaves, keeping its proportions: the slide becomes a column, that paragraph takes the space left over, and
+// the image is fitted inside it. An image given a size of its own (![w:300](...), which Marp writes as an inline
+// style) keeps that size. html2canvas, which paints the PDF pages, cannot be relied on for object-fit, so for the
+// PDF the fitted size is worked out and written onto the image instead (see fitFillImages).
+// Once fitted, an image is marked data-fitted, and keeps its place in the layout by that mark, so it can be
+// swapped for a bitmap of itself in the PDF (see rasterizeSvgs) without the slide shifting.
+const FILL_IMAGE = 'img[src*=".svg"]:only-child:not([style])';
+const FILLING = `:is(${FILL_IMAGE}, img[data-fitted]:only-child)`;
 const SLIDE_DEFAULT_CSS =
-  "svg[data-nomnoml] { display: block; width: 100%; height: auto; max-height: 563px; }\n" +
-  "img[data-pele] { display: block; margin: 0 auto; max-width: 100%; height: auto; max-height: 563px; object-fit: contain; }\n";
+  "svg[data-nomnoml] { display: block; margin: 0 auto; width: auto; height: auto; max-width: 100%; max-height: 563px; }\n" +
+  "img[data-pele] { display: block; margin: 0 auto; max-width: 100%; height: auto; max-height: 563px; object-fit: contain; }\n" +
+  `section:has(> p > ${FILLING}) { display: flex; flex-direction: column; justify-content: center; }\n` +
+  `section > p:has(> ${FILLING}) { flex: 1 1 0; min-height: 0; margin: 0; }\n` +
+  `section > p > ${FILL_IMAGE}:not([data-fitted]) { display: block; width: 100%; height: 100%; object-fit: contain; }\n` +
+  `section > p > img[data-fitted] { display: block; margin: 0 auto; }\n`;
 // PDF export rasterises each slide and pages the images, with libraries fetched on first export the same way.
 // WebKit won't let a canvas that has drawn Marp's SVG slide be read back, so the slide is rendered as plain
 // HTML and html2canvas paints it.
@@ -109,7 +126,9 @@ const PX_TO_PT = 0.75;
 const PREVIEW_DEBOUNCE_MS = 250;
 // In split mode the node's text and its preview share the field. The divider sets the text's share, within
 // bounds that keep both usable.
-const TEXT_SHARE_DEFAULT = 0.5;
+// The default gives the text about a fifth of the document beside the list (0.22 of a panel 90% wide), so
+// the slide preview has most of the room.
+const TEXT_SHARE_DEFAULT = 0.22;
 const TEXT_SHARE_MIN = 0.15;
 const TEXT_SHARE_MAX = 0.85;
 // Clearance a node keeps from the edge of the canvas, both for the pan clamp and for deciding whether the
@@ -132,11 +151,13 @@ let storyDescription = "";
 let nodes = []; // [{ name, x, y, text }], in default sequence order
 let navigation = defaultNavigation(); // { show, style, position, showNumber }
 let sequenceArrows = defaultSequenceArrows(); // { show, style, color, alpha }
+// Whether the story opens in the list view rather than the graph. Saved with the story, off unless set.
+let openInList = false;
 let selectedName = null;
 let viewMode = "graph"; // 'graph' or 'sequence': the two views share the area left of the panel
 // How the node's text is shown: 'source', 'preview', or both, 'split-columns' (side by side) or 'split-rows' (the
 // text above the preview).
-let textMode = "source";
+let textMode = "split-columns";
 let previewTimer = null;
 let textShare = TEXT_SHARE_DEFAULT; // the text's share of the field in split mode; the preview has the rest
 // The canvas measures nothing while the list is showing, so its last real size is kept for placing new nodes.
@@ -144,7 +165,8 @@ let canvasSize = { width: 0, height: 0 };
 let playingName = null; // the node on screen while playing
 let inspectorFraction = INSPECTOR_DEFAULT_FRACTION;
 // Each view keeps its own split, so widening the panel beside the list doesn't squeeze the graph afterwards.
-const viewFractions = { graph: INSPECTOR_DEFAULT_FRACTION, sequence: INSPECTOR_DEFAULT_FRACTION };
+const VIEW_DEFAULT_FRACTIONS = { graph: INSPECTOR_DEFAULT_FRACTION, sequence: INSPECTOR_SEQUENCE_DEFAULT_FRACTION };
+const viewFractions = { ...VIEW_DEFAULT_FRACTIONS };
 let zoom = 1;
 let panX = 0;
 let panY = 0;
@@ -191,6 +213,7 @@ const navStyleRadios = [...document.querySelectorAll('input[name="nav-style"]')]
 const navPositionRadios = [...document.querySelectorAll('input[name="nav-position"]')];
 const storyNavNumberEl = document.getElementById("story-nav-number");
 const storySeqShowEl = document.getElementById("story-seq-show");
+const storyOpenInListEl = document.getElementById("story-open-in-list");
 const storySeqOptionsEl = document.getElementById("story-seq-options");
 const seqStyleRadios = [...document.querySelectorAll('input[name="seq-style"]')];
 const storySeqColorEl = document.getElementById("story-seq-color");
@@ -202,6 +225,7 @@ const editorViewEl = document.getElementById("editor-view");
 const playViewEl = document.getElementById("play-view");
 const playTextEl = document.getElementById("play-text");
 const playNavEl = document.getElementById("play-nav");
+const btnReload = document.getElementById("btn-reload");
 const btnSequence = document.getElementById("btn-sequence");
 const btnGraph = document.getElementById("btn-graph");
 const viewButtons = [btnSequence, btnGraph];
@@ -275,6 +299,7 @@ function serialize() {
     description: storyDescription.trim(),
     navigation: { ...navigation },
     sequenceArrows: { ...sequenceArrows },
+    openInList,
     nodes: nodes.map(({ name, x, y, text }) => ({ name, x, y, text })),
   };
 
@@ -330,6 +355,7 @@ function parse(content) {
     description: "",
     navigation: defaultNavigation(),
     sequenceArrows: defaultSequenceArrows(),
+    openInList: false,
     nodes: [defaultStartNode()],
   });
 
@@ -373,6 +399,7 @@ function parse(content) {
     description: typeof raw.description === "string" ? raw.description : "",
     navigation: parseNavigation(raw.navigation),
     sequenceArrows: parseSequenceArrows(raw.sequenceArrows),
+    openInList: raw.openInList === true,
     nodes: parsed,
     error: null,
   };
@@ -384,12 +411,14 @@ function load(content) {
   storyDescription = result.description;
   navigation = result.navigation;
   sequenceArrows = result.sequenceArrows;
+  openInList = result.openInList;
   nodes = result.nodes;
 
   updateStoryBadge();
   storyDescriptionEl.value = storyDescription;
   applyNavigationControls();
   applySequenceArrowControls();
+  storyOpenInListEl.checked = openInList;
   selectNode(null);
 
   if (result.error !== null) {
@@ -445,6 +474,58 @@ function reloadFromDisk() {
     celbridge.document.notifyContentLoaded(ContentLoadedReason.ExternalReload);
   });
 }
+
+// The Reload button. Edits not yet saved are written first, so nothing typed is lost. The story is then read
+// from disk again, in case another tool changed it without the host saying so, and the slide on screen is
+// drawn again with its images fetched afresh, so a diagram edited elsewhere shows its new version.
+function reloadStory() {
+  reloadQueue = reloadQueue.then(async () => {
+    try {
+      await flushPendingSave();
+    } catch (e) {
+      console.error("[Story] Failed to save before reloading:", e);
+      return;
+    }
+
+    let content;
+    try {
+      content = (await celbridge.document.load())?.content ?? "";
+    } catch (e) {
+      console.error("[Story] Failed to reload the story:", e);
+      return;
+    }
+
+    imageReloadToken = Date.now();
+
+    if (content !== serialize()) {
+      nodeNameEdit.finish({ commit: false });
+      storyNameEdit.finish({ commit: false });
+      finishListRename({ commit: false });
+      const previousSelection = selectedName;
+      load(content);
+      if (getNode(previousSelection)) {
+        selectNode(previousSelection);
+      }
+    }
+
+    await renderPreview();
+    if (isPlaying) {
+      if (getNode(playingName)) {
+        navigateTo(playingName);
+      } else {
+        stopPlay();
+      }
+    }
+  });
+  return reloadQueue;
+}
+
+btnReload.addEventListener("click", () => {
+  btnReload.disabled = true;
+  reloadStory().finally(() => {
+    btnReload.disabled = false;
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Node helpers
@@ -1378,7 +1459,7 @@ attachPaneSplitter(splitterEl, {
     ensureSelectedVisible();
   },
   onReset() {
-    inspectorFraction = INSPECTOR_DEFAULT_FRACTION;
+    inspectorFraction = VIEW_DEFAULT_FRACTIONS[viewMode];
     applyInspectorSize();
     ensureSelectedVisible();
   },
@@ -1591,6 +1672,12 @@ function applySequenceArrowControls() {
   storySeqAlphaEl.value = String(Math.round(sequenceArrows.alpha * 100));
   storySeqAlphaValueEl.textContent = `${storySeqAlphaEl.value}%`;
 }
+
+// Only where the story opens next time; the view on screen now is left as it is.
+storyOpenInListEl.addEventListener("change", () => {
+  openInList = storyOpenInListEl.checked;
+  scheduleSave();
+});
 
 storyNavNumberEl.addEventListener("change", () => {
   navigation.showNumber = storyNavNumberEl.checked;
@@ -1983,9 +2070,18 @@ function isRelativeUrl(url) {
   return url !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.startsWith("/") && !url.startsWith("#");
 }
 
+// Bumped by the Reload button. While it is set, each project image's address carries it as a query, so the
+// WebView fetches the file again rather than showing the copy it cached when the story was opened.
+let imageReloadToken = 0;
+
 function resolveSlideImages(root) {
   const base = storyFolderUrl();
-  const resolve = (url) => isRelativeUrl(url) ? new URL(url, base).href : url;
+  const resolve = (url) => {
+    if (!isRelativeUrl(url)) return url;
+    const resolved = new URL(url, base);
+    if (imageReloadToken) resolved.searchParams.set("reload", String(imageReloadToken));
+    return resolved.href;
+  };
 
   for (const img of root.querySelectorAll("img[src]")) {
     img.setAttribute("src", resolve(img.getAttribute("src")));
@@ -2389,6 +2485,24 @@ pdfDialogEl.addEventListener("close", () => {
   if (pdfDialogResolve) closePdfDialog(null);
 });
 
+// Gives each filling SVG image (see SLIDE_DEFAULT_CSS) the size it is shown at as plain width and height
+// attributes: as large as fits the room its paragraph has, in the image's own proportions. The preview does
+// this with object-fit; the PDF's painter needs the size spelled out. The images must have loaded first.
+function fitFillImages(root) {
+  for (const img of root.querySelectorAll(`section > p > ${FILL_IMAGE}`)) {
+    const box = img.parentElement;
+    const roomWidth = box.clientWidth;
+    const roomHeight = box.clientHeight;
+    const { naturalWidth, naturalHeight } = img;
+    if (!(roomWidth > 0 && roomHeight > 0 && naturalWidth > 0 && naturalHeight > 0)) continue;
+
+    const scale = Math.min(roomWidth / naturalWidth, roomHeight / naturalHeight);
+    img.setAttribute("width", String(Math.floor(naturalWidth * scale)));
+    img.setAttribute("height", String(Math.floor(naturalHeight * scale)));
+    img.setAttribute("data-fitted", "");
+  }
+}
+
 // Images are painted only once they have arrived, so the slide waits for them.
 function imagesLoaded(root) {
   return Promise.all([...root.querySelectorAll("img")].map((img) =>
@@ -2530,6 +2644,92 @@ function addSlideLinks(pdf, section) {
   }
 }
 
+// html2canvas paints an SVG (an <img> of one, or a diagram drawn inline, which it turns into an image) with a
+// source rectangle, and WebKit scales an SVG drawn that way wrongly: the PDF showed a corner of the figure,
+// enlarged and cut off. So each SVG on the page is first drawn here, whole, onto a canvas of the size it is
+// shown at (times the export's scale), and swapped for that bitmap, which html2canvas paints faithfully.
+// A figure that can't be drawn (it failed to load, say) is left as it was.
+const PDF_SVG_SOURCE = /^data:image\/svg\+xml|\.svg(?:[?#]|$)/i;
+
+async function rasterize(src, width, height, scale) {
+  const image = new Image();
+  image.src = src;
+  await image.decode();
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}
+
+// The bitmap takes the figure's exact place: its size, and a block of its own if the figure was one. A filling
+// image's place is kept by the stylesheet, through its mark.
+function bitmapFor(original, png, width, height) {
+  const img = document.createElement("img");
+  img.src = png;
+  img.width = width;
+  img.height = height;
+  if (original.hasAttribute("data-fitted")) {
+    img.setAttribute("data-fitted", "");
+    return img;
+  }
+  const display = getComputedStyle(original).display;
+  img.style.display = display === "block" ? "block" : "inline-block";
+  img.style.margin = getComputedStyle(original).margin;
+  img.style.verticalAlign = getComputedStyle(original).verticalAlign;
+  return img;
+}
+
+async function rasterizeSvgs(root, scale) {
+  // Diagrams drawn inline (nomnoml). An <svg> inside another is part of it, and goes with it.
+  for (const svg of [...root.querySelectorAll("svg")]) {
+    if (svg.parentElement?.closest("svg")) continue;
+    const { width, height } = svg.getBoundingClientRect();
+    if (!(width > 0 && height > 0)) continue;
+    try {
+      const markup = new XMLSerializer().serializeToString(svg);
+      const png = await rasterize(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`, width, height, scale);
+      svg.replaceWith(bitmapFor(svg, png, width, height));
+    } catch (e) {
+      console.warn("[Story] Could not prepare a diagram for the PDF; it may show cropped:", e);
+    }
+  }
+
+  // SVG files and Pele (Mermaid) diagrams, which arrive as <img>. Its box is the fitted size: a filling image
+  // has had its size written on by fitFillImages, and a Pele diagram carries its own.
+  for (const img of [...root.querySelectorAll("img")]) {
+    if (!PDF_SVG_SOURCE.test(img.getAttribute("src") ?? "")) continue;
+    const { width, height } = img.getBoundingClientRect();
+    if (!(width > 0 && height > 0)) continue;
+    try {
+      const png = await rasterize(img.src, width, height, scale);
+      img.replaceWith(bitmapFor(img, png, width, height));
+    } catch (e) {
+      console.warn("[Story] Could not prepare an image for the PDF; it may show cropped:", e);
+    }
+  }
+}
+
+// A slide whose content runs past its bottom edge loses those lines, and in a PDF there is no scrolling to
+// reach them. Code is what usually overruns, so its text is made smaller, a step at a time, until the slide
+// fits, down to half its size; past that the slide is left to the author. The preview shows the slide as
+// written, so an overflowing slide can still be spotted there and shortened.
+const PDF_CODE_SHRINK_STEP = 0.92;
+const PDF_CODE_MIN_SCALE = 0.5;
+
+function shrinkCodeToFit(slide) {
+  const blocks = [...slide.querySelectorAll("pre")];
+  if (blocks.length === 0) return;
+
+  const overflows = () => slide.scrollHeight > slide.clientHeight + 1;
+  const sizes = blocks.map((pre) => parseFloat(getComputedStyle(pre).fontSize));
+  for (let scale = PDF_CODE_SHRINK_STEP; overflows() && scale >= PDF_CODE_MIN_SCALE; scale *= PDF_CODE_SHRINK_STEP) {
+    blocks.forEach((pre, i) => {
+      pre.style.fontSize = `${sizes[i] * scale}px`;
+    });
+  }
+}
+
 // A short fingerprint of a slide's picture, so slides that render alike are stored in the PDF once.
 function imageAlias(dataUrl) {
   let hash = 0x811c9dc5;
@@ -2590,6 +2790,9 @@ btnPdf.addEventListener("click", async () => {
 
       // A node holding several slides is shown by its first, as in play.
       const slide = stage.querySelector("section");
+      shrinkCodeToFit(slide);
+      fitFillImages(stage);
+      await rasterizeSvgs(slide, quality.scale);
       const width = slide.offsetWidth * PX_TO_PT;
       const height = slide.offsetHeight * PX_TO_PT;
       const canvas = await libraries.html2canvas(slide, {
@@ -2776,6 +2979,16 @@ async function init() {
       centreOn(focal, { animate: false });
     } else {
       render();
+    }
+
+    // A story set to open in the list view does so, with the node's text and slide side by side. The graph is
+    // centred first, while it can still be measured, so it is ready when the author switches to it.
+    if (openInList) {
+      setViewMode("sequence");
+    }
+    // The first slide is selected, so its text and preview are showing straight away.
+    if (focal) {
+      selectNode(focal.name);
     }
 
     // Signal that the editor has finished loading its content. The host's

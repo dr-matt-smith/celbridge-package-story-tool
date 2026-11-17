@@ -13,6 +13,29 @@ const { renderSvg } = globalThis.nomnoml;
 
 const LANGUAGE = "nomnoml";
 
+// nomnoml draws a diagram small, with text smaller than the slide's own, so it is enlarged up to twice its natural
+// size, as js/pele-plugin.js does for Mermaid, but never stretched to fill the slide. A diagram too big for the
+// room a slide has (the width inside the default theme's padding, and the height the theme gives a diagram) is
+// scaled down to fit instead.
+const MAX_SCALE = 2;
+const MAX_WIDTH = 1120;
+const MAX_HEIGHT = 563;
+
+// Sets the size the diagram is shown at on the <svg> element itself. The viewBox is left as drawn, so the
+// drawing scales with it.
+function sizeDiagram(svg) {
+  return svg.replace(/^<svg\b[^>]*>/, (tag) => {
+    const width = parseFloat(tag.match(/\swidth="([\d.]+)"/)?.[1]);
+    const height = parseFloat(tag.match(/\sheight="([\d.]+)"/)?.[1]);
+    if (!(width > 0 && height > 0)) return tag;
+
+    const scale = Math.min(MAX_SCALE, MAX_WIDTH / width, MAX_HEIGHT / height);
+    return tag
+      .replace(/\swidth="[\d.]+"/, ` width="${Math.round(width * scale)}"`)
+      .replace(/\sheight="[\d.]+"/, ` height="${Math.round(height * scale)}"`);
+  });
+}
+
 // A custom style directive, such as `#.tesco: visual=package fill=pink`: the name and colon, then the options.
 const STYLE_DIRECTIVE = /^(\s*#\.[^:\s]+\s*:)(.*)$/gm;
 
@@ -43,7 +66,7 @@ export default function nomnomlPlugin() {
 
       if (language === LANGUAGE) {
         try {
-          const svg = renderSvg(alignPackageTitles(token.content)).replace(/^<svg\b/, "<svg data-nomnoml");
+          const svg = sizeDiagram(renderSvg(alignPackageTitles(token.content))).replace(/^<svg\b/, "<svg data-nomnoml");
           return `<p>${svg}</p>\n`;
         } catch (e) {
           // A syntax error shows the source as a code block, so the author can see what to fix. The

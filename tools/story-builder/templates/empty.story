@@ -13,6 +13,7 @@
     "color": "#ffcc00",
     "alpha": 0.75
   },
+  "openInList": false,
   "nodes": [
     {
       "name": "Start",
